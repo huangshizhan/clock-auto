@@ -24,7 +24,7 @@ jobs:
             
             // 生成 0~30 分钟随机延迟
             function getRandomDelay() {
-              const max = 30 * 60 * 1000;
+              const max = 2 * 60 * 1000;
               return Math.floor(Math.random() * max);
             }
 
