@@ -2,26 +2,23 @@ name: 掘金自动签到抽奖（0成本+随机延迟）
 on:
   schedule:
     - cron: '0 0 * * *'  # 基础时间：UTC 0点 = 北京时间8点
-  workflow_dispatch:     # 手动触发开关（测试用）
+  workflow_dispatch:     # 手动触发开关
 
 jobs:
   auto-checkin:
     runs-on: ubuntu-latest
     steps:
-      - name: 安装Node.js环境
+      - name: 安装 Node.js 环境
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24  # 升级到最新版，消除弃用警告
 
       - name: 执行签到+抽奖（带±30分钟随机延迟）
         env:
-          # 这里的JUEJIN_COOKIE会从Secrets中读取
           JUEJIN_COOKIE: ${{ secrets.JUEJIN_COOKIE }}
         run: |
-          # 安装掘金辅助库
-          npm install juejin-helper
+          npm install juejin-helper@latest
           
-          # 核心脚本（含随机延迟）
           node -e "
             const JuejinHelper = require('juejin-helper');
             
@@ -32,34 +29,29 @@ jobs:
               return Math.floor(Math.random() * (max - min + 1)) + min;
             }
 
-            // 掘金签到+抽奖核心逻辑
+            // 核心任务
             async function runJuejinTask() {
               try {
                 const juejin = new JuejinHelper();
-                // 登录（使用Cookie）
                 await juejin.login(process.env.JUEJIN_COOKIE);
-                console.log(`[${new Date().toLocaleString()}] 掘金登录成功`);
+                console.log('[INFO] 掘金登录成功');
 
-                // 执行签到
                 const checkinResult = await juejin.checkIn();
-                console.log('签到结果：', checkinResult);
+                console.log('[INFO] 签到结果:', checkinResult);
 
-                // 执行免费抽奖（仅1次，不耗矿石）
                 const drawResult = await juejin.drawLottery();
-                console.log('抽奖结果：', drawResult);
+                console.log('[INFO] 抽奖结果:', drawResult);
 
               } catch (error) {
-                console.error(`[${new Date().toLocaleString()}] 任务执行失败：`, error.message);
+                console.error('[ERROR] 任务执行失败:', error.message);
+                console.error(error.stack);
+                process.exit(1);
               }
             }
 
-            // 主流程：先延迟，再执行任务
+            // 延迟执行
             const delayMs = getRandomDelay();
             const delayMinutes = Math.round(delayMs / 60000);
-            console.log(`[${new Date().toLocaleString()}] 本次随机延迟：${delayMinutes} 分钟`);
-            
-            // 延迟后执行任务
-            setTimeout(async () => {
-              await runJuejinTask();
-            }, delayMs);
+            console.log('[INFO] 本次随机延迟:', delayMinutes, '分钟');
+            setTimeout(runJuejinTask, delayMs);
           "
