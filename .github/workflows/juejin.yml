@@ -11,9 +11,9 @@ jobs:
       - name: 安装 Node.js 环境
         uses: actions/setup-node@v4
         with:
-          node-version: 24  # 升级到最新版，消除弃用警告
+          node-version: 24
 
-      - name: 执行签到+抽奖（带±30分钟随机延迟）
+      - name: 执行签到+抽奖（带0~30分钟随机延迟）
         env:
           JUEJIN_COOKIE: ${{ secrets.JUEJIN_COOKIE }}
         run: |
@@ -22,14 +22,12 @@ jobs:
           node -e "
             const JuejinHelper = require('juejin-helper');
             
-            // 生成±30分钟随机延迟（毫秒）
+            // 生成 0~30 分钟随机延迟（避免负数）
             function getRandomDelay() {
-              const min = -30 * 60 * 1000;
-              const max = 30 * 60 * 1000;
-              return Math.floor(Math.random() * (max - min + 1)) + min;
+              const max = 30 * 60 * 1000; // 30分钟
+              return Math.floor(Math.random() * max);
             }
 
-            // 核心任务
             async function runJuejinTask() {
               try {
                 const juejin = new JuejinHelper();
@@ -44,12 +42,10 @@ jobs:
 
               } catch (error) {
                 console.error('[ERROR] 任务执行失败:', error.message);
-                console.error(error.stack);
                 process.exit(1);
               }
             }
 
-            // 延迟执行
             const delayMs = getRandomDelay();
             const delayMinutes = Math.round(delayMs / 60000);
             console.log('[INFO] 本次随机延迟:', delayMinutes, '分钟');
