@@ -1,7 +1,7 @@
-name: 掘金自动签到抽奖（0成本+随机延迟）
+name: 掘金自动签到抽奖（0成本+1分钟随机延迟）
 on:
   schedule:
-    - cron: '0 0 * * *'  # 北京时间8点执行
+    - cron: '0 0 * * *'  # 北京时间8点自动执行
   workflow_dispatch:     # 手动触发开关
 
 jobs:
@@ -13,32 +13,36 @@ jobs:
         with:
           node-version: 24
 
-      - name: 执行签到+抽奖
+      - name: 执行掘金签到抽奖
         env:
           JUEJIN_COOKIE: ${{ secrets.JUEJIN_COOKIE }}
         run: |
           npm install juejin-helper@latest
           
           node -e "
-            const JuejinHelper = require('juejin-helper');
+            const { Juejin } = require('juejin-helper');
             
-            // 生成 0~30 分钟随机延迟
+            // 生成 0~1 分钟随机延迟
             function getRandomDelay() {
-              const max = 2 * 60 * 1000;
+              const max = 1 * 60 * 1000;
               return Math.floor(Math.random() * max);
             }
 
-            async function runJuejinTask() {
+            async function runTask() {
               try {
-                const juejin = new JuejinHelper();
-                await juejin.login(process.env.JUEJIN_COOKIE);
+                // 初始化掘金实例（最新版API）
+                const juejin = new Juejin();
+                // 登录（最新版登录方法）
+                await juejin.setCookie(process.env.JUEJIN_COOKIE);
                 console.log('[INFO] 掘金登录成功');
 
-                const checkinResult = await juejin.checkIn();
-                console.log('[INFO] 签到结果:', checkinResult);
+                // 执行签到（最新版签到API）
+                const checkinRes = await juejin.checkin();
+                console.log('[INFO] 签到结果:', checkinRes);
 
-                const drawResult = await juejin.drawLottery();
-                console.log('[INFO] 抽奖结果:', drawResult);
+                // 执行免费抽奖（最新版抽奖API）
+                const drawRes = await juejin.lottery.draw();
+                console.log('[INFO] 抽奖结果:', drawRes);
 
               } catch (error) {
                 console.error('[ERROR] 任务执行失败:', error.message);
@@ -49,5 +53,5 @@ jobs:
             const delayMs = getRandomDelay();
             const delayMinutes = Math.round(delayMs / 60000);
             console.log('[INFO] 本次随机延迟:', delayMinutes, '分钟');
-            setTimeout(runJuejinTask, delayMs);
+            setTimeout(runTask, delayMs);
           "
