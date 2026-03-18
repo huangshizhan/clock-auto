@@ -1,109 +1,81 @@
 name: 掘金自动签到抽奖（9:15±30分钟执行）
 on:
   schedule:
-    - cron: '15 1 * * *'  # 基础触发时间：北京时间9:15
-  workflow_dispatch:     # 手动触发开关
+    - cron: '15 1 * * *'
+  workflow_dispatch:
 
 jobs:
   juejin-auto:
     runs-on: ubuntu-latest
     steps:
-      - name: 安装Node.js环境
+      - name: 安装Node.js和axios
         uses: actions/setup-node@v4
         with:
           node-version: 24
+      - run: npm install axios
 
-      - name: 执行掘金签到+抽奖（0~30分钟随机延迟）
+      - name: 执行签到+抽奖（防风控版）
         env:
           JUEJIN_COOKIE: ${{ secrets.JUEJIN_COOKIE }}
         run: |
           node -e '
-            const https = require("https");
-            const zlib = require("zlib");
-            const { PassThrough } = require("stream");
+            const axios = require("axios");
+            const axiosRetry = require("axios-retry");
 
-            // 处理所有压缩格式（gzip/br/deflate）
-            function getDecompressor(encoding) {
-              switch (encoding) {
-                case "gzip": return zlib.createGunzip();
-                case "br": return zlib.createBrotliDecompress();
-                case "deflate": return zlib.createInflate();
-                default: return new PassThrough();
-              }
-            }
+            // 1. 配置axios（重试+防风控）
+            const instance = axios.create({
+              baseURL: "https://api.juejin.cn",
+              timeout: 15000,
+              headers: {
+                "Cookie": process.env.JUEJIN_COOKIE,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+                "Referer": "https://juejin.cn/",
+                "Origin": "https://juejin.cn",
+                "Accept": "application/json, */*",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Content-Type": "application/json"
+              },
+              // 自动解压所有压缩格式
+              decompress: true,
+              // 重试3次，防临时风控
+              retryDelay: axiosRetry.exponentialDelay
+            });
+            axiosRetry(instance, { retries: 3 });
 
-            // 封装掘金API请求（极简稳定版）
-            function request(apiPath, method = "POST") {
-              return new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => reject(new Error("API请求超时")), 10000);
-                const postData = "{}"; // 固定空请求体，对齐浏览器
-                const options = {
-                  hostname: "api.juejin.cn",
-                  port: 443,
-                  path: apiPath,
-                  method: method,
-                  headers: {
-                    "Cookie": process.env.JUEJIN_COOKIE,
-                    "Content-Type": "application/json",
-                    "Content-Length": postData.length,
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
-                    "Referer": "https://juejin.cn/",
-                    "Origin": "https://juejin.cn",
-                    "Accept": "*/*",
-                    "Accept-Encoding": "gzip, deflate, br"
-                  }
-                };
-
-                const req = https.request(options, (res) => {
-                  clearTimeout(timeout);
-                  const decompressor = getDecompressor(res.headers["content-encoding"]);
-                  let result = "";
-                  res.pipe(decompressor)
-                    .on("data", (chunk) => result += chunk.toString("utf8"))
-                    .on("end", () => {
-                      try {
-                        resolve(JSON.parse(result));
-                      } catch (e) {
-                        resolve({ raw: result, parse_error: e.message });
-                      }
-                    });
-                });
-
-                req.on("error", (e) => { clearTimeout(timeout); reject(e); });
-                req.write(postData);
-                req.end();
-              });
-            }
-
-            // 核心执行逻辑
+            // 2. 核心任务
             async function runTask() {
               try {
                 const now = new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
                 console.log("[INFO] 开始执行（北京时间）:", now);
-                
+
                 // 签到
-                const checkinRes = await request("/growth_api/v1/check_in");
-                console.log("[签到结果]", checkinRes);
-                if (checkinRes.err_no === 0) console.log("[✅ 签到成功] 获得矿石:", checkinRes.data?.incr_point || "未知");
-                else if (checkinRes.err_no === 11012) console.log("[ℹ️  今日已签到]");
-                else if (checkinRes.err_no) console.log("[❌ 签到失败]", checkinRes.err_msg || "未知错误");
+                let checkinRes = {};
+                try {
+                  checkinRes = await instance.post("/growth_api/v1/check_in", {});
+                  checkinRes = checkinRes.data;
+                  console.log("[✅ 签到成功]", checkinRes);
+                } catch (e) {
+                  console.log("[❌ 签到失败]", e.message || e.response?.data || "空响应（风控拦截）");
+                }
 
                 // 抽奖
-                const drawRes = await request("/growth_api/v1/lottery/draw");
-                console.log("[抽奖结果]", drawRes);
-                if (drawRes.err_no === 0) console.log("[✅ 抽奖成功] 奖品:", drawRes.data?.lottery_name || "未知");
-                else if (drawRes.err_no === 11004) console.log("[ℹ️  今日已抽奖]");
-                else if (drawRes.err_no) console.log("[❌ 抽奖失败]", drawRes.err_msg || "未知错误");
+                let drawRes = {};
+                try {
+                  drawRes = await instance.post("/growth_api/v1/lottery/draw", {});
+                  drawRes = drawRes.data;
+                  console.log("[✅ 抽奖成功]", drawRes);
+                } catch (e) {
+                  console.log("[❌ 抽奖失败]", e.message || e.response?.data || "空响应（风控拦截）");
+                }
 
               } catch (error) {
                 console.error("[💥 执行失败]", error.message);
-                process.exit(1);
               }
             }
 
-            // 生成0~30分钟随机延迟（核心修改点）
-            const delayMs = Math.floor(Math.random() * 30 * 60 * 1000); // 30分钟 = 30*60*1000毫秒
+            // 3. 0~30分钟随机延迟
+            const delayMs = Math.floor(Math.random() * 30 * 60 * 1000);
             const delayMinutes = Math.round(delayMs / 60000);
-            console.log("[INFO] 9:15基础上随机延迟:", delayMinutes, "分钟（最终执行时间9:15+"+delayMinutes+"）");
+            console.log("[INFO] 延迟:", delayMinutes, "分钟");
             setTimeout(runTask, delayMs);
           '
