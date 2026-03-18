@@ -1,45 +1,42 @@
-name: 掘金自动签到抽奖（9:15±5分钟执行）
+name: 掘金自动签到抽奖（9:15±30分钟执行）
 on:
   schedule:
-    - cron: '15 1 * * *'  # 北京时间9:15（UTC+8 → UTC 1:15）
+    - cron: '15 1 * * *'  # 基础触发时间：北京时间9:15
   workflow_dispatch:     # 手动触发开关
 
 jobs:
   juejin-auto:
     runs-on: ubuntu-latest
     steps:
-      - name: 安装Node.js稳定版
+      - name: 安装Node.js环境
         uses: actions/setup-node@v4
         with:
-          node-version: 24  # 避免环境兼容问题
+          node-version: 24
 
-      - name: 执行掘金签到+抽奖（最终稳定版）
+      - name: 执行掘金签到+抽奖（0~30分钟随机延迟）
         env:
           JUEJIN_COOKIE: ${{ secrets.JUEJIN_COOKIE }}
         run: |
           node -e '
-            // 导入核心模块
             const https = require("https");
             const zlib = require("zlib");
             const { PassThrough } = require("stream");
 
-            // 1. 统一处理所有压缩格式（gzip/br/deflate）
+            // 处理所有压缩格式（gzip/br/deflate）
             function getDecompressor(encoding) {
               switch (encoding) {
                 case "gzip": return zlib.createGunzip();
                 case "br": return zlib.createBrotliDecompress();
                 case "deflate": return zlib.createInflate();
-                default: return new PassThrough(); // 不压缩直接透传
+                default: return new PassThrough();
               }
             }
 
-            // 2. 封装掘金API请求（无临时参数、兼容所有压缩）
+            // 封装掘金API请求（极简稳定版）
             function request(apiPath, method = "POST") {
               return new Promise((resolve, reject) => {
-                // 10秒超时保护
-                const timeout = setTimeout(() => reject(new Error("API请求超时(10s)")), 10000);
-                const postData = "{}"; // 固定空对象，对齐浏览器请求体
-                
+                const timeout = setTimeout(() => reject(new Error("API请求超时")), 10000);
+                const postData = "{}"; // 固定空请求体，对齐浏览器
                 const options = {
                   hostname: "api.juejin.cn",
                   port: 443,
@@ -53,80 +50,59 @@ jobs:
                     "Referer": "https://juejin.cn/",
                     "Origin": "https://juejin.cn",
                     "Accept": "*/*",
-                    "Accept-Encoding": "gzip, deflate, br, zstd",
-                    "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-                    "sec-ch-ua": "\\"Not(A:Brand\\";v=\\"8\\", \\"Chromium\\";v=\\"144\\", \\"Google Chrome\\";v=\\"144\\"",
-                    "sec-ch-ua-mobile": "?0",
-                    "sec-ch-ua-platform": "\\"Windows\\"",
-                    "sec-fetch-dest": "empty",
-                    "sec-fetch-mode": "cors",
-                    "sec-fetch-site": "same-site",
-                    "priority": "u=1, i"
+                    "Accept-Encoding": "gzip, deflate, br"
                   }
                 };
 
-                // 发送请求并处理响应
                 const req = https.request(options, (res) => {
                   clearTimeout(timeout);
                   const decompressor = getDecompressor(res.headers["content-encoding"]);
                   let result = "";
-
                   res.pipe(decompressor)
                     .on("data", (chunk) => result += chunk.toString("utf8"))
                     .on("end", () => {
                       try {
                         resolve(JSON.parse(result));
                       } catch (e) {
-                        resolve({ raw: result, parse_error: e.message, code: res.statusCode });
+                        resolve({ raw: result, parse_error: e.message });
                       }
-                    })
-                    .on("error", (e) => reject(new Error(`解压缩失败: ${e.message}`)));
+                    });
                 });
 
-                // 请求错误处理
-                req.on("error", (e) => {
-                  clearTimeout(timeout);
-                  reject(new Error(`请求失败: ${e.message}`));
-                });
-
+                req.on("error", (e) => { clearTimeout(timeout); reject(e); });
                 req.write(postData);
                 req.end();
               });
             }
 
-            // 3. 生成0~5分钟随机延迟
-            function getRandomDelay() {
-              return Math.floor(Math.random() * 5 * 60 * 1000);
-            }
-
-            // 4. 核心任务：签到+抽奖
+            // 核心执行逻辑
             async function runTask() {
               try {
                 const now = new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
-                console.log("[INFO] 开始执行掘金签到抽奖（北京时间）:", now);
+                console.log("[INFO] 开始执行（北京时间）:", now);
                 
                 // 签到
-                const checkinRes = await request("/growth_api/v1/check_in", "POST");
-                console.log("[🚀 签到结果]", checkinRes);
+                const checkinRes = await request("/growth_api/v1/check_in");
+                console.log("[签到结果]", checkinRes);
                 if (checkinRes.err_no === 0) console.log("[✅ 签到成功] 获得矿石:", checkinRes.data?.incr_point || "未知");
-                else if (checkinRes.err_no === 11012) console.log("[ℹ️  今日已签到] 无需重复操作");
+                else if (checkinRes.err_no === 11012) console.log("[ℹ️  今日已签到]");
                 else if (checkinRes.err_no) console.log("[❌ 签到失败]", checkinRes.err_msg || "未知错误");
 
                 // 抽奖
-                const drawRes = await request("/growth_api/v1/lottery/draw", "POST");
-                console.log("[🚀 抽奖结果]", drawRes);
+                const drawRes = await request("/growth_api/v1/lottery/draw");
+                console.log("[抽奖结果]", drawRes);
                 if (drawRes.err_no === 0) console.log("[✅ 抽奖成功] 奖品:", drawRes.data?.lottery_name || "未知");
-                else if (drawRes.err_no === 11004) console.log("[ℹ️  今日已抽奖] 免费次数已用完");
+                else if (drawRes.err_no === 11004) console.log("[ℹ️  今日已抽奖]");
                 else if (drawRes.err_no) console.log("[❌ 抽奖失败]", drawRes.err_msg || "未知错误");
 
               } catch (error) {
-                console.error("[💥 任务执行失败]", error.message);
+                console.error("[💥 执行失败]", error.message);
                 process.exit(1);
               }
             }
 
-            // 5. 随机延迟后执行
-            const delayMs = getRandomDelay();
+            // 生成0~30分钟随机延迟（核心修改点）
+            const delayMs = Math.floor(Math.random() * 30 * 60 * 1000); // 30分钟 = 30*60*1000毫秒
             const delayMinutes = Math.round(delayMs / 60000);
             console.log("[INFO] 9:15基础上随机延迟:", delayMinutes, "分钟（最终执行时间9:15+"+delayMinutes+"）");
             setTimeout(runTask, delayMs);
