@@ -1,29 +1,28 @@
-name: 掘金自动签到抽奖（9:15执行）
+name: 掘金自动签到抽奖（9:15±5分钟执行）
 on:
   schedule:
-    - cron: '15 1 * * *'  # 北京时间9:15（UTC+8 → UTC 1:15）
+    - cron: '15 1 * * *'  # 基础时间：北京时间9:15（UTC 1:15）
   workflow_dispatch:     # 手动触发开关
 
 jobs:
   juejin-auto:
     runs-on: ubuntu-latest
     steps:
-      - name: 安装Node.js环境（显式指定版本，避免兼容问题）
+      - name: 安装Node.js环境
         uses: actions/setup-node@v4
         with:
-          node-version: 24  # 稳定版Node.js，避免环境异常
+          node-version: 24
 
-      - name: 执行掘金签到+抽奖
+      - name: 执行掘金签到+抽奖（带5分钟随机延迟）
         env:
           JUEJIN_COOKIE: ${{ secrets.JUEJIN_COOKIE }}
         run: |
           node -e "
             const https = require('https');
             
-            // 封装掘金API请求（增加超时+错误捕获）
+            // 封装掘金API请求（带超时）
             function request(apiPath, method = 'POST', data = {}) {
               return new Promise((resolve, reject) => {
-                // 设置5秒超时，避免卡壳
                 const timeout = setTimeout(() => reject(new Error('API请求超时')), 5000);
                 
                 const postData = method === 'POST' ? JSON.stringify(data) : '';
@@ -38,19 +37,18 @@ jobs:
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
                     'Referer': 'https://juejin.cn/',
                     'Origin': 'https://juejin.cn',
-                    'Accept': 'application/json, text/plain, */*' // 新增：补充标准请求头
+                    'Accept': 'application/json, text/plain, */*'
                   }
                 };
 
                 const req = https.request(options, (res) => {
-                  clearTimeout(timeout); // 取消超时
+                  clearTimeout(timeout);
                   let result = '';
                   res.on('data', (chunk) => { result += chunk; });
                   res.on('end', () => {
                     try {
                       resolve(JSON.parse(result));
                     } catch (e) {
-                      // 非JSON响应也返回，方便排查
                       resolve({ raw: result, parse_error: e.message });
                     }
                   });
@@ -64,6 +62,11 @@ jobs:
                 if (postData) req.write(postData);
                 req.end();
               });
+            }
+
+            // 生成0~5分钟随机延迟（核心新增）
+            function getRandomDelay() {
+              return Math.floor(Math.random() * 5 * 60 * 1000); // 5分钟 = 5*60秒*1000毫秒
             }
 
             // 核心任务：签到+抽奖
@@ -99,6 +102,9 @@ jobs:
               }
             }
 
-            // 立即执行任务（无延迟，9:15准时跑）
-            runTask();
+            // 随机延迟后执行任务（核心新增）
+            const delayMs = getRandomDelay();
+            const delayMinutes = Math.round(delayMs / 60000);
+            console.log('[INFO] 9:15基础上随机延迟：', delayMinutes, '分钟（最终执行时间：9:15+' + delayMinutes + '分钟）');
+            setTimeout(runTask, delayMs);
           "
