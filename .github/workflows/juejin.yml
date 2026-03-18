@@ -1,7 +1,7 @@
 name: 掘金自动签到抽奖（9:15±5分钟执行）
 on:
   schedule:
-    - cron: '15 1 * * *'  # 基础时间：北京时间9:15（UTC 1:15）
+    - cron: '15 1 * * *'  # 北京时间9:15触发
   workflow_dispatch:     # 手动触发开关
 
 jobs:
@@ -13,98 +13,119 @@ jobs:
         with:
           node-version: 24
 
-      - name: 执行掘金签到+抽奖（带5分钟随机延迟）
+      - name: 执行掘金签到+抽奖（最终适配版）
         env:
           JUEJIN_COOKIE: ${{ secrets.JUEJIN_COOKIE }}
         run: |
           node -e "
             const https = require('https');
-            
-            // 封装掘金API请求（带超时）
-            function request(apiPath, method = 'POST', data = {}) {
+            const zlib = require('zlib');
+            const { PassThrough } = require('stream');
+
+            // 统一处理所有压缩格式：gzip/br/deflate
+            function getDecompressor(encoding) {
+              switch (encoding) {
+                case 'gzip': return zlib.createGunzip();
+                case 'br': return zlib.createBrotliDecompress();
+                case 'deflate': return zlib.createInflate();
+                default: return new PassThrough(); // 不压缩直接透传
+              }
+            }
+
+            // 封装掘金API请求（适配签到/抽奖，无风控硬编码）
+            function request(apiPath, method = 'POST') {
               return new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => reject(new Error('API请求超时')), 5000);
-                
-                const postData = method === 'POST' ? JSON.stringify(data) : '';
+                const timeout = setTimeout(() => reject(new Error('API请求超时(10s)')), 10000);
+                const postData = '{}'; // 固定传空对象，和浏览器一致
                 const options = {
                   hostname: 'api.juejin.cn',
                   port: 443,
                   path: apiPath,
                   method: method,
                   headers: {
+                    // 完全对齐浏览器核心头，无临时参数
                     'Cookie': process.env.JUEJIN_COOKIE,
-                    'Content-Type': 'application/json; charset=utf-8',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                    'Content-Type': 'application/json',
+                    'Content-Length': postData.length,
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
                     'Referer': 'https://juejin.cn/',
                     'Origin': 'https://juejin.cn',
-                    'Accept': 'application/json, text/plain, */*'
+                    'Accept': '*/*',
+                    'Accept-Encoding': 'gzip, deflate, br, zstd',
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'sec-ch-ua': '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+                    'sec-ch-ua-mobile': '?0',
+                    'sec-ch-ua-platform': '"Windows"',
+                    'sec-fetch-dest': 'empty',
+                    'sec-fetch-mode': 'cors',
+                    'sec-fetch-site': 'same-site',
+                    'priority': 'u=1, i'
                   }
                 };
 
                 const req = https.request(options, (res) => {
                   clearTimeout(timeout);
+                  // 根据响应头自动选择解压器
+                  const decompressor = getDecompressor(res.headers['content-encoding']);
                   let result = '';
-                  res.on('data', (chunk) => { result += chunk; });
-                  res.on('end', () => {
-                    try {
-                      resolve(JSON.parse(result));
-                    } catch (e) {
-                      resolve({ raw: result, parse_error: e.message });
-                    }
-                  });
+
+                  res.pipe(decompressor)
+                    .on('data', (chunk) => result += chunk.toString('utf8'))
+                    .on('end', () => {
+                      console.log(`[DEBUG] ${apiPath} 原始响应:`, result);
+                      try {
+                        resolve(JSON.parse(result));
+                      } catch (e) {
+                        resolve({ raw: result, parse_error: e.message, code: res.statusCode });
+                      }
+                    })
+                    .on('error', (e) => reject(new Error(`解压缩失败: ${e.message}`)));
                 });
 
                 req.on('error', (e) => {
                   clearTimeout(timeout);
-                  reject(e);
+                  reject(new Error(`请求失败: ${e.message}`));
                 });
-                
-                if (postData) req.write(postData);
+
+                req.write(postData);
                 req.end();
               });
             }
 
-            // 生成0~5分钟随机延迟（核心新增）
+            // 生成0~5分钟随机延迟
             function getRandomDelay() {
-              return Math.floor(Math.random() * 5 * 60 * 1000); // 5分钟 = 5*60秒*1000毫秒
+              return Math.floor(Math.random() * 5 * 60 * 1000);
             }
 
-            // 核心任务：签到+抽奖
+            // 核心任务：签到+抽奖（双接口适配）
             async function runTask() {
               try {
-                console.log('[INFO] 开始执行掘金签到抽奖任务（北京时间：', new Date().toLocaleString(), '）');
+                const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+                console.log('[INFO] 开始执行掘金签到抽奖（北京时间）:', now);
                 
-                // 1. 执行签到
+                // 1. 掘金签到接口
                 const checkinRes = await request('/growth_api/v1/check_in', 'POST');
-                console.log('[签到结果]', checkinRes);
-                if (checkinRes.err_no === 0) {
-                  console.log('[SUCCESS] 签到成功！');
-                } else if (checkinRes.err_no === 11012) {
-                  console.log('[INFO] 今日已签到');
-                } else if (checkinRes.err_no) {
-                  console.log('[ERROR] 签到失败：', checkinRes.err_msg || '未知错误');
-                }
+                console.log('[🚀 签到结果]', checkinRes);
+                if (checkinRes.err_no === 0) console.log('[✅ 签到成功] 获得矿石:', checkinRes.data?.incr_point || '未知');
+                else if (checkinRes.err_no === 11012) console.log('[ℹ️  今日已签到] 无需重复操作');
+                else if (checkinRes.err_no) console.log('[❌ 签到失败]', checkinRes.err_msg || '未知错误');
 
-                // 2. 执行免费抽奖
+                // 2. 掘金免费抽奖接口（钻石/矿石抽奖）
                 const drawRes = await request('/growth_api/v1/lottery/draw', 'POST');
-                console.log('[抽奖结果]', drawRes);
-                if (drawRes.err_no === 0) {
-                  console.log('[SUCCESS] 抽奖成功！奖品：', drawRes.data?.lottery_name || '未知');
-                } else if (drawRes.err_no === 11004) {
-                  console.log('[INFO] 今日免费抽奖次数已用完');
-                } else if (drawRes.err_no) {
-                  console.log('[ERROR] 抽奖失败：', drawRes.err_msg || '未知错误');
-                }
+                console.log('[🚀 抽奖结果]', drawRes);
+                if (drawRes.err_no === 0) console.log('[✅ 抽奖成功] 奖品:', drawRes.data?.lottery_name || '未知');
+                else if (drawRes.err_no === 11004) console.log('[ℹ️  今日已抽奖] 免费次数已用完');
+                else if (drawRes.err_no) console.log('[❌ 抽奖失败]', drawRes.err_msg || '未知错误');
 
               } catch (error) {
-                console.error('[FATAL] 任务执行失败：', error.message);
+                console.error('[💥 任务执行失败]', error.message);
                 process.exit(1);
               }
             }
 
-            // 随机延迟后执行任务（核心新增）
+            // 随机延迟后执行
             const delayMs = getRandomDelay();
             const delayMinutes = Math.round(delayMs / 60000);
-            console.log('[INFO] 9:15基础上随机延迟：', delayMinutes, '分钟（最终执行时间：9:15+' + delayMinutes + '分钟）');
+            console.log('[INFO] 9:15基础上随机延迟:', delayMinutes, '分钟（最终执行时间9:15+'+delayMinutes+'）');
             setTimeout(runTask, delayMs);
           "
