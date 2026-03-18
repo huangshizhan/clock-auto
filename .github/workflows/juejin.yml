@@ -1,4 +1,4 @@
-name: 掘金自动签到抽奖（9:15±5分钟执行）
+name: 掘金自动签到抽奖（9:15±30分钟执行）
 on:
   schedule:
     - cron: '15 1 * * *'  # 北京时间9:15触发
@@ -94,7 +94,7 @@ jobs:
 
             // 生成0~5分钟随机延迟
             function getRandomDelay() {
-              return Math.floor(Math.random() * 5 * 60 * 1000);
+              return Math.floor(Math.random() * 30 * 60 * 1000);
             }
 
             // 核心任务：签到+抽奖（双接口适配）
